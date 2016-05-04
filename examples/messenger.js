@@ -6,7 +6,7 @@
 // * a Messenger Platform setup (https://developers.facebook.com/docs/messenger-platform/quickstart)
 // You need to `npm install` the following dependencies: body-parser, express, request.
 //
-// 1. npm install body-parser express request 
+// 1. npm install body-parser express request
 // 2. Download and install ngrok from https://ngrok.com/download
 // 3. ./ngrok http 8445
 // 4. WIT_TOKEN=your_access_token FB_PAGE_ID=your_page_id FB_PAGE_TOKEN=your_page_token FB_VERIFY_TOKEN=verify_token node examples/messenger.js
@@ -37,36 +37,6 @@ if (!FB_PAGE_TOKEN) {
   throw new Error('missing FB_PAGE_TOKEN');
 }
 const FB_VERIFY_TOKEN = process.env.FB_VERIFY_TOKEN;
-
-// Messenger API specific code
-
-// See the Send API reference
-// https://developers.facebook.com/docs/messenger-platform/send-api-reference
-const fbReq = request.defaults({
-  uri: 'https://graph.facebook.com/me/messages',
-  method: 'POST',
-  json: true,
-  qs: { access_token: FB_PAGE_TOKEN },
-  headers: {'Content-Type': 'application/json'},
-});
-
-const fbMessage = (recipientId, msg, cb) => {
-  const opts = {
-    form: {
-      recipient: {
-        id: recipientId,
-      },
-      message: {
-        text: msg,
-      },
-    },
-  };
-  fbReq(opts, (err, resp, data) => {
-    if (cb) {
-      cb(err || data.error && data.error.message, data);
-    }
-  });
-};
 
 // See the Webhook reference
 // https://developers.facebook.com/docs/messenger-platform/webhook-reference
@@ -109,6 +79,18 @@ const findOrCreateSession = (fbid) => {
   return sessionId;
 };
 
+const firstEntityValue = (entities, entity) => {
+  const val = entities && entities[entity] &&
+    Array.isArray(entities[entity]) &&
+    entities[entity].length > 0 &&
+    entities[entity][0].value
+  ;
+  if (!val) {
+    return null;
+  }
+  return typeof val === 'object' ? val.value : val;
+};
+
 // Our bot actions
 const actions = {
   say(sessionId, context, message, cb) {
@@ -138,13 +120,26 @@ const actions = {
     }
   },
   merge(sessionId, context, entities, message, cb) {
+    console.log(context);
     cb(context);
   },
   error(sessionId, context, error) {
     console.log(error.message);
   },
-  // You should implement your custom actions here
-  // See https://wit.ai/docs/quickstart
+  lookup_tonights_schedule(sessionId, context, cb) {
+    cb(context);
+  },
+  list_schedule(sessionId, context, cb) {
+    const recipientId = sessions[sessionId].fbid;
+    fbCarousel(recipientId);
+    cb(context);
+  },
+  set_reminder(sessionId, context, cb) {
+    const recipientId = sessions[sessionId].fbid;
+    console.log('set reminder...');
+    console.log(context);
+    cb(context);
+  }
 };
 
 // Setting up our bot
@@ -173,7 +168,7 @@ app.get('/fb', (req, res) => {
 app.post('/fb', (req, res) => {
   // Parsing the Messenger API response
   const messaging = getFirstMessagingEntry(req.body);
-  if (messaging && messaging.message && messaging.recipient.id === FB_PAGE_ID) {
+  if (messaging && (messaging.message || messaging.postback) && messaging.recipient.id === FB_PAGE_ID) {
     // Yay! We got a new message!
 
     // We retrieve the Facebook user ID of the sender
@@ -184,8 +179,8 @@ app.post('/fb', (req, res) => {
     const sessionId = findOrCreateSession(sender);
 
     // We retrieve the message content
-    const msg = messaging.message.text;
-    const atts = messaging.message.attachments;
+    const msg = messaging.postback ? messaging.postback.payload : messaging.message.text;
+    const atts = messaging.message ? messaging.message.attachments : null;
 
     if (atts) {
       // We received an attachment
@@ -196,17 +191,24 @@ app.post('/fb', (req, res) => {
         'Sorry I can only process text messages for now.'
       );
     } else if (msg) {
+      console.log("message: ");
+      console.log(msg);
       // We received a text message
 
       // Let's forward the message to the Wit.ai Bot Engine
       // This will run all actions until our bot has nothing left to do
       wit.runActions(
         sessionId, // the user's current session
-        msg, // the user's message 
+        msg, // the user's message
         sessions[sessionId].context, // the user's current session state
         (error, context) => {
           if (error) {
             console.log('Oops! Got an error from Wit:', error);
+
+            fbMessage(
+              sender,
+              'Oops! Got an error from Wit'
+            );
           } else {
             // Our bot did everything it has to do.
             // Now it's waiting for further messages to proceed.
@@ -229,3 +231,132 @@ app.post('/fb', (req, res) => {
   res.sendStatus(200);
 });
 
+
+// Messenger API specific code
+
+// See the Send API reference
+// https://developers.facebook.com/docs/messenger-platform/send-api-reference
+const fbReq = request.defaults({
+  uri: 'https://graph.facebook.com/me/messages',
+  method: 'POST',
+  json: true,
+  qs: { access_token: FB_PAGE_TOKEN },
+  headers: {'Content-Type': 'application/json'},
+});
+
+const fbMessage = (recipientId, msg, cb) => {
+  const opts = {
+    form: {
+      recipient: {
+        id: recipientId,
+      },
+      message: {
+        text: msg,
+      },
+    },
+  };
+  fbReq(opts, (err, resp, data) => {
+    if (cb) {
+      cb(err || data.error && data.error.message, data);
+    }
+  });
+};
+
+const fbImage = (recipientId, cb) => {
+  const opts = {
+    form: {
+      recipient: {
+        id: recipientId,
+      },
+      message: {
+       attachment:{
+         type:"image",
+         payload:{
+           "url":"http://images.amcnetworks.com/sundancechannel.com/wp-content/uploads/2015/06/1-Hap-and-Leonard-Nav-KeyArt-800x450-314x174.jpg"
+         }
+       }
+     },
+    },
+  };
+  fbReq(opts, (err, resp, data) => {
+    if (cb) {
+      cb(err || data.error && data.error.message, data);
+    }
+  });
+};
+
+const fbCarousel = (recipientId, cb) => {
+  const opts = {
+    form: {
+      recipient: {
+        id: recipientId,
+      },
+        "message":{
+          "attachment":{
+            "type":"template",
+            "payload":{
+              "template_type":"generic",
+              "elements":[
+                {
+                  "title":"7:30PM ET - The Bone Collector",
+                  "image_url":"http://images.amcnetworks.com/sundancechannel.com/wp-content/uploads/2016/04/The-Bone-Collector-700x384-700x384.jpg",
+                  "subtitle":"A quadriplegic detective (Denzel Washington) and a patrol cop (Angelina Jolie) try to catch a killer re-creating grisly crimes.",
+                  "buttons":[
+                    {
+                      "type":"web_url",
+                      "url":"http://www.sundance.tv/films/the-bone-collector",
+                      "title":"More Info"
+                    },
+                    {
+                      "type":"postback",
+                      "title":"Set Reminder",
+                      "payload":"Set reminder for The Bone Collector"
+                    }
+                  ]
+                },
+                {
+                  "title":"10:00PM ET - The Last Panthers",
+                  "image_url":"http://images.amcnetworks.com/sundancechannel.com/wp-content/uploads/2016/04/The-Last-Panthers-Episode-104-Serpents-Kiss800x450-700x384.jpg",
+                  "subtitle":"Episode 4: Serpent's Kiss",
+                  "buttons":[
+                    {
+                      "type":"web_url",
+                      "url":"http://www.sundance.tv/series/the-last-panthers/episodes/season-1/serpents-kiss",
+                      "title":"More Info"
+                    },
+                    {
+                      "type":"postback",
+                      "title":"Set Reminder",
+                      "payload":"Set reminder for The Last Panthers"
+                    }
+                  ]
+                },
+                {
+                  "title":"11:10PM - Breaking Bad",
+                  "image_url":"http://images.amcnetworks.com/sundancechannel.com/wp-content/uploads/2013/02/breaking-bad-280x160.jpg",
+                  "subtitle":"Pilot",
+                  "buttons":[
+                    {
+                      "type":"web_url",
+                      "url":"http://www.sundance.tv/series/breaking-bad",
+                      "title":"More Info"
+                    },
+                    {
+                      "type":"postback",
+                      "title":"Set Reminder",
+                      "payload":"Set reminder for Breaking Bad"
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        },
+    },
+  };
+  fbReq(opts, (err, resp, data) => {
+    if (cb) {
+      cb(err || data.error && data.error.message, data);
+    }
+  });
+};
